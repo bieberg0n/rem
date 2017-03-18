@@ -89,7 +89,8 @@ async def reply_start(reader_c, writer_c, dst):
 
 
 async def socks5_proxy(reader_c, writer_c, dst):
-    dst_s, port_s = socks5_proxy_addr
+    dst_s, port_s_str = socks5_proxy_addr
+    port_s = int(port_s_str)
     reader_s, writer_s = await asyncio.open_connection(dst_s, port_s, loop=loop)
     writer_s.write(b'\x05\x01\x00')
     await writer_s.drain()
@@ -116,12 +117,12 @@ async def socks5_proxy(reader_c, writer_c, dst):
 
 async def auto_switch(reader_c, writer_c, dst):
     dst_ip = await dig(dst['domain'])
-    print('get ip')
+    # print('get ip')
     if ip_in_cn(dst_ip):
-        print('over')
+        # print('over')
         await reply_start(reader_c, writer_c, dst)
     else:
-        print('over')
+        # print('over')
         await socks5_proxy(reader_c, writer_c, dst)
         return
 
@@ -129,7 +130,7 @@ async def auto_switch(reader_c, writer_c, dst):
 async def handle(reader_c, writer_c):
     dst_addr = await get_dst_addr(reader_c, writer_c)
     if dst_addr:
-        print('handle')
+        # print('handle')
         pass
     else:
         return
