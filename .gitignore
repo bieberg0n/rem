@@ -87,3 +87,7 @@ ENV/
 
 # Rope project settings
 .ropeproject
+rem.json
+socks.py
+get_china_ip.sh
+delegated-apnic-latest
