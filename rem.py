@@ -50,14 +50,18 @@ async def get_dst_addr(reader_c, writer_c):
 
 
 async def reply(reader, writer, dst_name):
-    while True:
-        buf = await reader.read(2048*4)
-        if not buf:
-            break
-        else:
-            # print(buf[:200])
-            writer.write(buf)
-            await writer.drain()
+    try:
+        while True:
+            buf = await reader.read(2048*4)
+            if not buf:
+                break
+            else:
+                # print(buf[:200])
+                writer.write(buf)
+                await writer.drain()
+    except ConnectionResetError as e:
+        print(e)
+    writer.close()
     print('{} : close'.format(dst_name))
 
 
@@ -80,39 +84,51 @@ async def create_pipe(reader_c, writer_c, reader_s, writer_s, dst):
     await reply(reader_s, writer_c, dst)
 
 
-async def reply_start(reader_c, writer_c, dst):
-    reader_s, writer_s = await asyncio.open_connection(dst['domain'], port=dst['port'], loop=loop)
-    print('direct connect to', dst['domain'], dst['port'])
-    writer_c.write(b'\x05\x00\x00\x01\x00\x00\x00\x00\x10\x10')
-    await writer_s.drain()
-    await create_pipe(reader_c, writer_c, reader_s, writer_s, dst)
+async def direct(reader_c, writer_c, dst):
+    try:
+        reader_s, writer_s = await asyncio.open_connection(dst['domain'], port=dst['port'], loop=loop)
+    except ConnectionRefusedError as e:
+        print(e)
+        writer_c.close()
+        return
+    else:
+        print('direct connect to', dst['domain'], dst['port'])
+        writer_c.write(b'\x05\x00\x00\x01\x00\x00\x00\x00\x10\x10')
+        await writer_s.drain()
+        await create_pipe(reader_c, writer_c, reader_s, writer_s, dst)
 
 
 async def socks5_proxy(reader_c, writer_c, dst):
     dst_s, port_s_str = socks5_proxy_addr
     port_s = int(port_s_str)
-    reader_s, writer_s = await asyncio.open_connection(dst_s, port_s, loop=loop)
-    writer_s.write(b'\x05\x01\x00')
-    await writer_s.drain()
-    r = await reader_s.read(512)
-    if r == b'\x05\x00':
-        pass
+    try:
+        reader_s, writer_s = await asyncio.open_connection(dst_s, port_s, loop=loop)
+    except ConnectionRefusedError as e:
+        print(e)
+        writer_c.close()
+        return
     else:
-        raise Exception("connect fail")
+        writer_s.write(b'\x05\x01\x00')
+        await writer_s.drain()
+        r = await reader_s.read(512)
+        if r == b'\x05\x00':
+            pass
+        else:
+            raise Exception("connect fail")
 
-    ip_bytes = valid_ip(dst['domain'])
-    port_bytes = pack('>H', dst['port'])
-    if ip_bytes:
-        writer_s.write(b'\x05\x01\x00\x01' + ip_bytes + port_bytes)
-    else:
-        dst_bytes = dst['domain'].encode()
-        len_dst_bytes = pack('B', len(dst_bytes))
-        writer_s.write(b'\x05\x01\x00\x03' + len_dst_bytes + dst_bytes
-                       + port_bytes)
-    await writer_s.drain()
+        ip_bytes = valid_ip(dst['domain'])
+        port_bytes = pack('>H', dst['port'])
+        if ip_bytes:
+            writer_s.write(b'\x05\x01\x00\x01' + ip_bytes + port_bytes)
+        else:
+            dst_bytes = dst['domain'].encode()
+            len_dst_bytes = pack('B', len(dst_bytes))
+            writer_s.write(b'\x05\x01\x00\x03' + len_dst_bytes + dst_bytes
+                           + port_bytes)
+        await writer_s.drain()
 
-    print('socks5 connect to', dst['domain'], dst['port'])
-    await create_pipe(reader_c, writer_c, reader_s, writer_s, dst)
+        print('socks5 connect to', dst['domain'], dst['port'])
+        await create_pipe(reader_c, writer_c, reader_s, writer_s, dst)
 
 
 async def auto_switch(reader_c, writer_c, dst):
@@ -120,7 +136,7 @@ async def auto_switch(reader_c, writer_c, dst):
     # print('get ip')
     if ip_in_cn(dst_ip):
         # print('over')
-        await reply_start(reader_c, writer_c, dst)
+        await direct(reader_c, writer_c, dst)
     else:
         # print('over')
         await socks5_proxy(reader_c, writer_c, dst)
