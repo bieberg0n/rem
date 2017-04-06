@@ -52,7 +52,7 @@ async def get_dst_addr(reader_c, writer_c):
 async def reply(reader, writer, dst_name):
     try:
         while True:
-            buf = await reader.read(2048*4)
+            buf = await reader.read(1024*16)
             if not buf:
                 break
             else:
