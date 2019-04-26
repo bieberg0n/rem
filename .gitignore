@@ -91,3 +91,6 @@ rem.json
 socks.py
 get_china_ip.sh
 delegated-apnic-latest
+.idea
+/ebin/*
+*.dump
