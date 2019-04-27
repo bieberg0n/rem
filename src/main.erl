@@ -12,6 +12,17 @@
 %% API
 -export([main/1]).
 
+
+-record(request, {
+  socket,
+  addr_type,
+  raw_bin,
+  host,
+  ip,
+  port
+}).
+
+
 log(Arg) ->
   io:format(Arg).
 
@@ -34,6 +45,34 @@ handle_loop(Lsocket, Rsocket) ->
   end.
 
 
+route(Req, direct) when is_record(Req, request) ->
+  #request{socket = Socket, host = Host, ip = IP, port = Port} = Req,
+
+  log("direct: ~p:~p~n", [Host, Port]),
+  {ok, R_socket} = gen_tcp:connect(IP, Port, [binary, {active, true}]),
+  gen_tcp:send(Socket, <<5, 0, 0, 1, 0, 0, 0, 0, 16#10, 16#10>>),
+
+  inet:setopts(Socket, [{active, true}]),
+  handle_loop(Socket, R_socket);
+
+route(Req, proxy) when is_record(Req, request) ->
+  #request{socket = Socket, addr_type = Addr_type, raw_bin = Bin, host = Host, port = Port} = Req,
+
+  log("proxy: ~p:~p~n", [Host, Port]),
+  {ok, R_socket} = gen_tcp:connect({127, 0, 0, 1}, 1080, [binary, {active, false}]),
+  gen_tcp:send(R_socket, <<5, 1, 0>>),
+  {ok, <<5, 0>>} = gen_tcp:recv(R_socket, 2),
+  gen_tcp:send(R_socket, <<5, 1, 0, Addr_type, Bin/binary>>),
+
+  inet:setopts(Socket, [{active, true}]),
+  inet:setopts(R_socket, [{active, true}]),
+  handle_loop(Socket, R_socket);
+
+route(IP_list, Req) when is_record(Req, request) ->
+  #request{ip = IP} = Req,
+  route(Req, ip_list:by_direct(IP_list, IP)).
+
+
 handle(Socket, IP_list) ->
   {ok, <<Ver, Len, _Methods:Len/bytes>>} = gen_tcp:recv(Socket, 0),
   gen_tcp:send(Socket, <<5, 0>>),
@@ -43,36 +82,23 @@ handle(Socket, IP_list) ->
   case Addr_type of
     1 ->
       <<A:8, B:8, C:8, D:8, Port:16>> = Bin,
-      IPAddr = {A, B, C, D},
-      Host = integer_to_list(A) ++ "." ++ integer_to_list(B) ++ "." ++ integer_to_list(C) ++ "." ++ integer_to_list(D);
+      IP = {A, B, C, D},
+      Host = integer_to_list(A) ++ "." ++ integer_to_list(B) ++ "." ++ integer_to_list(C) ++ "." ++ integer_to_list(D),
+      Request = #request{socket = Socket, addr_type = Addr_type, raw_bin = Bin, host = Host, ip = IP, port = Port},
+      route(IP_list, Request);
 
     3 ->
       <<D_len:8, Host_bytes:D_len/bytes, Port:16>> = Bin,
       Host = binary_to_list(Host_bytes),
-      {ok, IPAddr} = inet:getaddr(Host, inet)
-  end,
-
-  case ip_list:is_cn_ip(IP_list, IPAddr) of
-    true ->
-      log("direct: ~p:~p~n", [Host, Port]),
-      {ok, Rsocket} = gen_tcp:connect(IPAddr, Port, [binary, {active, true}]),
-      gen_tcp:send(Socket, <<5, 0, 0, 1, 0, 0, 0, 0, 16#10, 16#10>>);
-
-    false ->
-      log("proxy: ~p:~p~n", [Host, Port]),
-      {ok, Rsocket} = gen_tcp:connect({127, 0, 0, 1}, 1081, [binary, {active, false}]),
-      gen_tcp:send(Rsocket, <<5, 1, 0>>),
-      {ok, <<5, 0>>} = gen_tcp:recv(Rsocket, 2),
-      gen_tcp:send(Rsocket, <<5, 1, 0, Addr_type, Bin/binary>>),
-      inet:setopts(Rsocket, [{active, true}])
-  end,
-  inet:setopts(Socket, [{active, true}]),
-  handle_loop(Socket, Rsocket).
+      {ok, IP} = inet:getaddr(Host, inet),
+      Request = #request{socket = Socket, addr_type = Addr_type, raw_bin = Bin, host = Host, ip = IP, port = Port},
+      route(IP_list, Request)
+  end.
 
 
 main(_) ->
   IP_list = ip_list:read(),
-  tcp_server:start_serv(1080, fun(Socket) -> handle(Socket, IP_list) end).
+  tcp_server:start_serv(1081, fun(Socket) -> handle(Socket, IP_list) end).
 %%  log("~p~n", [ip_list:cidr_network({{116, 21, 181, 1}, 23})]).
 %%  log("~p~n", [ip_list:is_cn_ip(Ip_list, {116, 21, 181, 106})]).
 %%  log("~p~n", [ip_list:is_cn_ip(Ip_list, "47.89.69.253")]),
