@@ -1,0 +1,17 @@
+host = example.com
+port = 443
+method = https
+key = xxxx
+listen_port = 1081
+
+main:
+	mkdir -p ebin
+	erlc -o ebin src/*.erl
+
+dev:
+	mkdir -p ebin
+	erlc -o ebin src/*.erl
+	erl -pa ./ebin -noshell -s main main "" -h $(host) -p $(port) -m $(method) -k $(key) -l $(listen_port) -s init stop
+
+run:
+	erl -pa ./ebin -noshell -s main main "" -h $(host) -p $(port) -m $(method) -k $(key) -l $(listen_port) -s init stop
