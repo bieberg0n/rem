@@ -97,11 +97,11 @@ route(Req, direct, _) when is_record(Req, request) ->
   inet:setopts(Socket, [{active, true}]),
   handle_loop(Socket, R_socket);
 
-route(Req, proxy, {"socks5", Host, Port}) when is_record(Req, request) ->
+route(Req, proxy, {"socks5", P_host, P_port, _}) when is_record(Req, request) ->
   #request{socket = Socket, addr_type = Addr_type, raw_bin = Bin, host = Host, port = Port} = Req,
 
   log("proxy: ~p:~p~n", [Host, Port]),
-  {ok, R_socket} = gen_tcp:connect(Host, Port, [binary, {active, false}]),
+  {ok, R_socket} = gen_tcp:connect(P_host, P_port, [binary, {active, false}]),
   gen_tcp:send(R_socket, <<5, 1, 0>>),
   {ok, <<5, 0>>} = gen_tcp:recv(R_socket, 2),
   gen_tcp:send(R_socket, <<5, 1, 0, Addr_type, Bin/binary>>),
@@ -123,7 +123,7 @@ route(Req, proxy, {"https", P_host, P_port, Key}) when is_record(Req, request) -
       Proxy_auth = "Proxy-Authorization: Basic " ++ K ++"\r\n"
   end,
 %%  log("~p~n", [<<"CONNECT ", (list_to_binary(Host))/binary, ":", (integer_to_binary(Port))/binary, " HTTP/1.1\r\n", (list_to_binary(Proxy_auth))/binary, "Proxy-Connection: Keep-Alive\r\n\r\n">>]),
-  ssl:send(R_socket, <<"CONNECT ", (list_to_binary(Host))/binary, ":", (integer_to_binary(Port))/binary, " HTTP/1.1\r\n", (list_to_binary(Proxy_auth))/binary, "Proxy-Connection: Keep-Alive\r\n\r\n">>),
+  ssl:send(R_socket, list_to_binary(["CONNECT ", Host, ":", integer_to_binary(Port), " HTTP/1.1\r\n", Proxy_auth, "Proxy-Connection: Keep-Alive\r\n\r\n"])),
   recv_https(R_socket, <<>>),
 
   gen_tcp:send(Socket, <<5, 0, 0, 1, 0, 0, 0, 0, 16#10, 16#10>>),
