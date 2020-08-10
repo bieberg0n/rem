@@ -48,17 +48,24 @@ handle_loop(Lsocket, Rsocket) ->
   end.
 
 
-handle_https_loop(L_socket, R_socket) ->
+handle_http_loop(L_socket, R_socket, SslMode) ->
   receive
     {tcp, L_socket, Bin} ->
-%%      io:format("L: ~p~n", [Bin]),
-      ssl:send(R_socket, Bin),
-      handle_https_loop(L_socket, R_socket);
+          case SslMode of
+              true ->
+                  ssl:send(R_socket, Bin);
+              _ ->
+                  gen_tcp:send(R_socket, Bin)
+          end,
+      handle_http_loop(L_socket, R_socket, SslMode);
+
+      {tcp, R_socket, Bin} ->
+          gen_tcp:send(L_socket, Bin),
+          handle_http_loop(L_socket, R_socket, SslMode);
 
     {ssl, R_socket, Bin} ->
-%%      io:format("R: ~p~n", [Bin]),
       gen_tcp:send(L_socket, Bin),
-      handle_https_loop(L_socket, R_socket);
+      handle_http_loop(L_socket, R_socket, SslMode);
 
     {tcp_closed, _} ->
       log("closed~n");
@@ -67,23 +74,35 @@ handle_https_loop(L_socket, R_socket) ->
       log("closed~n");
 
     N ->
-%%      {ssl, R_socket, Bin} = N,
-      log("unknown msg: ~p~n", [N])
+      log("handle http ssl mode: ~p loop unknown msg: ~p~n", [SslMode, N])
   end.
 
+handle_http_loop(L_socket, R_socket) ->
+    handle_http_loop(L_socket, R_socket, false).
 
-recv_https(Sock, Bin) ->
+handle_https_loop(L_socket, R_socket) ->
+    handle_http_loop(L_socket, R_socket, true).
+
+recv_http_void(Sock, Bin) ->
   receive
     {ssl, Sock, B} ->
       NewBin = list_to_binary([Bin, B]),
       Len = (size(NewBin) - 4) * 8,
       case NewBin of
         <<_:Len, "\r\n\r\n">> ->
-%%          log("~p~n", [NewBin]),
           ok;
         _ ->
-          recv_https(Sock, NewBin)
-      end
+          recv_http_void(Sock, NewBin)
+      end;
+      {tcp, Sock, B} ->
+          NewBin = list_to_binary([Bin, B]),
+          Len = (size(NewBin) - 4) * 8,
+          case NewBin of
+              <<_:Len, "\r\n\r\n">> ->
+                  ok;
+              _ ->
+                  recv_http_void(Sock, NewBin)
+          end
   end.
 
 
@@ -111,8 +130,27 @@ route(Req, proxy, {"socks5", P_host, P_port, _}) when is_record(Req, request) ->
   handle_loop(Socket, R_socket);
 
 
+route(Req, proxy, {"http", P_host, P_port, Key}) when is_record(Req, request) ->
+    #request{socket = Socket, addr_type = _Addr_type, raw_bin = _Bin, host = Host, port = Port} = Req,
+    log("proxy: ~p:~p~n", [Host, Port]),
+
+    {ok, R_socket} = gen_tcp:connect(P_host, P_port, [{active, true}]),
+    case Key of
+        "" ->
+            Proxy_auth = "";
+        K ->
+            Proxy_auth = "Proxy-Authorization: Basic " ++ K ++"\r\n"
+    end,
+    gen_tcp:send(R_socket, list_to_binary(["CONNECT ", Host, ":", integer_to_binary(Port), " HTTP/1.1\r\n", Proxy_auth, "Proxy-Connection: Keep-Alive\r\n\r\n"])),
+    recv_http_void(R_socket, <<>>),
+
+    gen_tcp:send(Socket, <<5, 0, 0, 1, 0, 0, 0, 0, 16#10, 16#10>>),
+    inet:setopts(Socket, [{active, true}]),
+    handle_http_loop(Socket, R_socket);
+
+
 route(Req, proxy, {"https", P_host, P_port, Key}) when is_record(Req, request) ->
-  #request{socket = Socket, addr_type = Addr_type, raw_bin = Bin, host = Host, port = Port} = Req,
+  #request{socket = Socket, addr_type = _Addr_type, raw_bin = _Bin, host = Host, port = Port} = Req,
   log("proxy: ~p:~p~n", [Host, Port]),
 
   {ok, R_socket} = ssl:connect(P_host, P_port, [{active, true}]),
@@ -124,7 +162,7 @@ route(Req, proxy, {"https", P_host, P_port, Key}) when is_record(Req, request) -
   end,
 %%  log("~p~n", [<<"CONNECT ", (list_to_binary(Host))/binary, ":", (integer_to_binary(Port))/binary, " HTTP/1.1\r\n", (list_to_binary(Proxy_auth))/binary, "Proxy-Connection: Keep-Alive\r\n\r\n">>]),
   ssl:send(R_socket, list_to_binary(["CONNECT ", Host, ":", integer_to_binary(Port), " HTTP/1.1\r\n", Proxy_auth, "Proxy-Connection: Keep-Alive\r\n\r\n"])),
-  recv_https(R_socket, <<>>),
+  recv_http_void(R_socket, <<>>),
 
   gen_tcp:send(Socket, <<5, 0, 0, 1, 0, 0, 0, 0, 16#10, 16#10>>),
   inet:setopts(Socket, [{active, true}]),
